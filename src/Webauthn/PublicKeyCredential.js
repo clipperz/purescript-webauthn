@@ -1,17 +1,17 @@
 "use strict";
-exports.createImpl = function (options) {
-  console.log(options);
+export function createImpl (options) {
+//   console.log(options);
   return navigator.credentials.create(options);
-};
+}
 
-exports.getImpl = function (options) {
+export function getImpl (options) {
   return navigator.credentials.get(options);
-};
+}
 
-exports.getTransportsImpl = function (response) {
+export function getTransportsImpl (response) {
   return response.getTransports();
-};
+}
 
-exports.isUserVerifyingPlatformAuthenticatorAvailableImpl = function () {
+export function isUserVerifyingPlatformAuthenticatorAvailableImpl () {
   return PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-};
+}
