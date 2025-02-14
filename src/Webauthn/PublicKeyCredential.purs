@@ -1,35 +1,45 @@
--- TODO: Extensions
-
 module Webauthn.PublicKeyCredential
-  ( get
-  , create
-  , isUserVerifyingPlatformAuthenticatorAvailable
-  , getTransports
+  ( Attestation(..)
+  , AuthenticatorAssertionResponse
+  , AuthenticatorAttachment(..)
+  , AuthenticatorAttestationResponse
+  , AuthenticatorSelection
+  , ClientData
+  , CredentialDescriptor
+  , Extensions(..)
+  , PublicKeyAlgorithm(..)
   , PublicKeyCredential
   , PublicKeyCredentialCreationOptions
-  , defaultCreationOptions
   , PublicKeyCredentialRequestOptions
-  , defaultCredentialRequestOptions
-  , Transport(..)
-  , UserVerification(..)
-  , PublicKeyAlgorithm(..)
-  , AuthenticatorAttachment(..)
-  , Attestation(..)
   , RelyingParty
+  , Transport(..)
   , User
-  , CredentialDescriptor
-  , AuthenticatorSelection
-  , AuthenticatorAttestationResponse
-  , AuthenticatorAssertionResponse
-  ) where
+  , UserVerification(..)
+  , create
+  , defaultCreationOptions
+  , defaultCredentialRequestOptions
+  , get
+  , getClientData
+  , getPRFResult
+  , getTransports
+  , isPRFEnabled
+  , isUserVerifyingPlatformAuthenticatorAvailable
+  )
+  where
 
 import Prelude
 
 import Control.Monad.Except (catchError)
+import Data.Argonaut.Core (Json)
 import Data.Array as Array
 import Data.ArrayBuffer.Types (ArrayBuffer)
+import Data.Codec (decode)
+import Data.Codec.Argonaut (JsonDecodeError)
+import Data.Codec.Argonaut as CA
+import Data.Codec.Argonaut.Record as CAR
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Tuple (Tuple(..))
 import Data.Tuple.Nested ((/\))
 import Effect (Effect)
 import Effect.Aff (Aff, Error, effectCanceler, error, makeAff)
@@ -124,6 +134,17 @@ encodeAttestation = encodeString <<< case _ of
   INDIRECT -> "indirect"
   DIRECT -> "direct"
 
+data Extensions
+  = PRF ArrayBuffer
+
+encodeExtensions :: Extensions -> Tuple String Foreign
+encodeExtensions = case _ of
+  PRF first -> 
+    Tuple "prf" $ ( FO.singleton "eval" ( encodeObject $
+                      FO.singleton "first" (encodeArrayBuffer first)
+                    )
+                  ) # encodeObject
+
 type CredentialDescriptor =
   { id :: ArrayBuffer
   , transports :: Maybe (Array Transport)
@@ -177,6 +198,7 @@ type PublicKeyCredentialCreationOptions =
   , excludeCredentials :: Maybe (Array CredentialDescriptor)
   , authenticatorSelection :: Maybe AuthenticatorSelection
   , attestation :: Maybe Attestation
+  , extensions :: Array Extensions
   }
 
 defaultCreationOptions ::
@@ -184,9 +206,10 @@ defaultCreationOptions ::
   , user :: User
   , challenge :: ArrayBuffer
   , pubKeyCredParams :: Array PublicKeyAlgorithm
+  , extensions :: Array Extensions
   } ->
   PublicKeyCredentialCreationOptions
-defaultCreationOptions { rp, user, challenge, pubKeyCredParams } =
+defaultCreationOptions { rp, user, challenge, pubKeyCredParams, extensions } =
   { rp
   , user
   , challenge
@@ -195,6 +218,7 @@ defaultCreationOptions { rp, user, challenge, pubKeyCredParams } =
   , excludeCredentials: Nothing
   , authenticatorSelection: Nothing
   , attestation: Nothing
+  , extensions
   }
 
 encodeRelyingParty :: RelyingParty -> Foreign
@@ -235,6 +259,7 @@ encodePublicKeyCredentialCreationOptions opts = encodeObject
       , map (\ec -> "excludeCredentials" /\ encodeArray (map encodeCredentialDescriptor ec)) opts.excludeCredentials
       , map (\as -> "authenticatorSelection" /\ encodeAuthenticatorSelection as) opts.authenticatorSelection
       , map (\a -> "attestation" /\ encodeAttestation a) opts.attestation
+      , Just ("extensions" /\ encodeObject (FO.fromFoldable (map encodeExtensions opts.extensions)))
       ]))
 
 type PublicKeyCredentialRequestOptions =
@@ -243,15 +268,17 @@ type PublicKeyCredentialRequestOptions =
   , rpId :: Maybe String
   , allowCredentials :: Maybe (Array CredentialDescriptor)
   , userVerification :: Maybe UserVerification
+  , extensions :: Array Extensions
   }
 
-defaultCredentialRequestOptions :: { challenge :: ArrayBuffer } -> PublicKeyCredentialRequestOptions
-defaultCredentialRequestOptions { challenge } =
+defaultCredentialRequestOptions :: { challenge :: ArrayBuffer, extensions :: Array Extensions } -> PublicKeyCredentialRequestOptions
+defaultCredentialRequestOptions { challenge, extensions } =
   { challenge
   , timeout: Nothing
   , rpId: Nothing
   , allowCredentials: Nothing
   , userVerification: Nothing
+  , extensions
   }
 
 encodePublicKeyCredentialRequestOptions :: PublicKeyCredentialRequestOptions -> Foreign
@@ -263,6 +290,7 @@ encodePublicKeyCredentialRequestOptions opts = encodeObject
       , map (\rpId -> "rpId" /\ encodeString rpId) opts.rpId
       , map (\ec -> "allowCredentials" /\ encodeArray (map encodeCredentialDescriptor ec)) opts.allowCredentials
       , map (\uf -> "userVerification" /\ encodeUserVerification uf) opts.userVerification
+      , Just ("extensions" /\ encodeObject (FO.fromFoldable (map encodeExtensions opts.extensions)))
       ]))
 
 type AuthenticatorAttestationResponse =
@@ -280,6 +308,22 @@ type AuthenticatorAssertionResponse =
   , signature :: ArrayBuffer
   , userHandle :: ArrayBuffer
   }
+
+type ClientData =
+  { challenge :: String
+  , type :: String
+  , origin :: String
+  , crossOrigin :: Boolean
+  }
+
+clientDataCodec :: CA.JsonCodec ClientData
+clientDataCodec =
+  CAR.object "ClientData"
+    { challenge: CA.string
+    , type: CA.string
+    , origin: CA.string
+    , crossOrigin: CA.boolean
+    }
 
 promiseToAff :: forall a. Effect (Promise a) -> Aff a
 promiseToAff mkPromise = makeAff \cb -> do
@@ -318,6 +362,18 @@ get options = flip catchError (pure <<< Left) $ Right <$> promiseToAff
   (runEffectFn1
     getImpl
     (encodeObject (FO.singleton "publicKey" (encodePublicKeyCredentialRequestOptions options))))
+
+foreign import getClientDataImpl :: AuthenticatorAttestationResponse -> Json
+getClientData :: AuthenticatorAttestationResponse -> Either JsonDecodeError ClientData
+getClientData = decode clientDataCodec <<< getClientDataImpl
+
+foreign import isPRFEnabledImpl :: Foreign -> Boolean
+isPRFEnabled :: forall a. PublicKeyCredential a -> Boolean
+isPRFEnabled = isPRFEnabledImpl <<< unsafeCoerce
+
+foreign import getPRFResultImpl :: Foreign -> ArrayBuffer
+getPRFResult :: forall a. PublicKeyCredential a -> ArrayBuffer
+getPRFResult = getPRFResultImpl <<< unsafeCoerce
 
 foreign import isUserVerifyingPlatformAuthenticatorAvailableImpl :: Effect (Promise Boolean)
 isUserVerifyingPlatformAuthenticatorAvailable :: Aff Boolean
