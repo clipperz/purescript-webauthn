@@ -25,13 +25,14 @@ module Webauthn.PublicKeyCredential
 
 import Prelude
 
+import Control.Monad.Except (catchError)
 import Data.Array as Array
 import Data.ArrayBuffer.Types (ArrayBuffer)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Tuple.Nested ((/\))
 import Effect (Effect)
-import Effect.Aff (Aff, effectCanceler, error, makeAff)
+import Effect.Aff (Aff, Error, effectCanceler, error, makeAff)
 import Effect.Uncurried (EffectFn1, runEffectFn1)
 import Foreign.Object as FO
 import Unsafe.Coerce (unsafeCoerce)
@@ -302,8 +303,8 @@ foreign import createImpl ::
   EffectFn1
     Foreign
     (Promise (PublicKeyCredential AuthenticatorAttestationResponse))
-create :: PublicKeyCredentialCreationOptions -> Aff (PublicKeyCredential AuthenticatorAttestationResponse)
-create options = promiseToAff
+create :: PublicKeyCredentialCreationOptions -> Aff (Either Error (PublicKeyCredential AuthenticatorAttestationResponse))
+create options = flip catchError (pure <<< Left) $ Right <$> promiseToAff
   (runEffectFn1
     createImpl
     (encodeObject (FO.singleton "publicKey" (encodePublicKeyCredentialCreationOptions options))))
@@ -312,8 +313,8 @@ foreign import getImpl ::
   EffectFn1
     Foreign
     (Promise (PublicKeyCredential AuthenticatorAssertionResponse))
-get :: PublicKeyCredentialRequestOptions -> Aff (PublicKeyCredential AuthenticatorAssertionResponse)
-get options = promiseToAff
+get :: PublicKeyCredentialRequestOptions -> Aff (Either Error (PublicKeyCredential AuthenticatorAssertionResponse))
+get options = flip catchError (pure <<< Left) $ Right <$> promiseToAff
   (runEffectFn1
     getImpl
     (encodeObject (FO.singleton "publicKey" (encodePublicKeyCredentialRequestOptions options))))
